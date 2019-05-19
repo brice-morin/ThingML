@@ -73,11 +73,6 @@ public abstract class JSThingImplCompiler extends NewFSMBasedThingImplCompiler {
 				.section("if").lines().indent()
 				.append("console.log(instance.name + msg +'');")
 				.after("}");
-			/* FIXME: This if seems useless, what was it for?
-			if (!ctx.getDebugWithID()) {
-				builder.append("console.log(instance.name + msg +'');\n");
-			}
-			*/
 		}
 		
 		main.append("");
@@ -333,10 +328,32 @@ public abstract class JSThingImplCompiler extends NewFSMBasedThingImplCompiler {
 	}
 	
 	protected void generateActionsForState(State s, StateJSState state, Context ctx) {
-		if (s.getEntry() != null || debugProfile.isDebugBehavior() || s instanceof FinalState) {
+		boolean generateEntry = s.getEntry() != null || debugProfile.isDebugBehavior() || s instanceof FinalState;
+		boolean resetProperties = false;
+		if (s instanceof CompositeState) {
+			final CompositeState cs = (CompositeState)s;
+			resetProperties = !cs.isHistory();
+			generateEntry = generateEntry || resetProperties;
+		}
+		
+		if (generateEntry) {
 			StringBuilder builder = state.onEntry();
 			if (debugProfile.isDebugBehavior()) {
 				builder.append("" + ThingMLHelpers.findContainingThing(s).getName() + "_print_debug(this, '" + ctx.traceOnEntry(ThingMLHelpers.findContainingThing(s), ThingMLHelpers.findContainingRegion(s), s) + "');\n");
+			}
+			if (resetProperties) {
+				if (!s.getProperties().isEmpty())
+					builder.append("//reset properties\n");
+				for(Property p : s.getProperties()) {
+					if (p.isReadonly()) continue;
+					builder.append("this." + ctx.getVariableName(p) + " = ");
+					if (p.getInit() != null) {
+						ctx.getCompiler().getThingActionCompiler().generate(p.getInit(), builder, ctx);
+					} else {
+						builder.append(((JSContext)ctx).getDefaultValue(p.getTypeRef().getType()));
+					}
+					builder.append(";\n");
+				}
 			}
 			if (s.getEntry() != null)
 				ctx.getCompiler().getThingActionCompiler().generate(s.getEntry(), builder, ctx);
@@ -356,7 +373,13 @@ public abstract class JSThingImplCompiler extends NewFSMBasedThingImplCompiler {
 	
 	@Override
 	protected void generateTransition(Transition t, Message msg, Port p, Section section, Context ctx) {
-		StateJSTransition transition = JSSourceBuilder.stateJSTransition(section, ThingMLElementHelper.qname((State)t.eContainer(), "_"));
+		StateJSTransition transition;
+		if (p != null && msg != null) {//empty transition
+			transition = JSSourceBuilder.stateJSTransition(section, "Event."+ctx.firstToUpper(msg.getName()), ThingMLElementHelper.qname((State)t.eContainer(), "_"), ThingMLElementHelper.qname(t.getTarget(), "_"));
+		} else {
+			transition = JSSourceBuilder.stateJSTransition(section, null, ThingMLElementHelper.qname((State)t.eContainer(), "_"), ThingMLElementHelper.qname(t.getTarget(), "_"));
+		}
+		
 		transition.setTo(ThingMLElementHelper.qname(t.getTarget(), "_"));
 		
 		if (t.getEvent() != null)
@@ -378,7 +401,7 @@ public abstract class JSThingImplCompiler extends NewFSMBasedThingImplCompiler {
 		if (t.eContainer() instanceof CompositeState && t.eContainer().eContainer() instanceof Thing) // Should be root statemachine
 			containerName = "this._statemachine";
 		
-		StateJSTransition transition = JSSourceBuilder.stateJSTransition(section, containerName);
+		StateJSTransition transition = JSSourceBuilder.stateJSTransition(section, "Event."+ctx.firstToUpper(msg.getName()), containerName, null);
 		
 		if (t.getEvent() != null)
 			transition.setMessage(msg.getName()).setPort(p.getName());
